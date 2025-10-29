@@ -3794,6 +3794,8 @@ class S4Mk3MotorManager {
                     this.deck.isSlipping = true;
                     engine.setValue(this.deck.group, "scratch2_enable", true);
                 } else if (this.deck.wheelTouch.touched === false && this.deck.isSlipping && Math.abs(playbackError) < SlipmatErrorThresh) {
+                    // TODO ronso0
+                    // make sure we properly reset isSlipping
                     console.warn("---> unset slipping + scratching");
                     this.deck.isSlipping = false;
                     engine.setValue(this.deck.group, "scratch2_enable", false);
