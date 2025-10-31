@@ -360,7 +360,7 @@ const TargetMotorOutput45RPM = 5600; //measured in a rough calibration test, not
 // And set the target motor output for nudging
 let rps = 0;
 let TargetMotorOutput = 0;
-if (BaseRevolutionsPerMinute === 33) {
+if (BaseRevolutionsPerMinute == 33) {
     rps = (100/3) / 60;
     TargetMotorOutput = TargetMotorOutput33RPM;
 } else { // 45 RPM
@@ -3793,7 +3793,7 @@ class S4Mk3MotorManager {
                     console.warn("---> set slipping + scratching");
                     this.deck.isSlipping = true;
                     engine.setValue(this.deck.group, "scratch2_enable", true);
-                } else if (this.deck.wheelTouch.touched === false && this.deck.isSlipping && Math.abs(playbackError) < SlipmatErrorThresh) {
+                } else if (this.deck.wheelTouch.touched == false && this.deck.isSlipping && Math.abs(playbackError) < SlipmatErrorThresh) {
                     // TODO ronso0
                     // make sure we properly reset isSlipping
                     console.warn("---> unset slipping + scratching");
@@ -3817,10 +3817,10 @@ class S4Mk3MotorManager {
                     // Use the slipmat error threshold as a 'dead zone' to avoid chattering
                     // when hand-spinning close to the nominal rotation velocity
                     if (playbackError > SlipmatErrorThresh) {
-                        console.warn("--- playbackError > SlipmatErrorThresh");
+                        console.warn("--- playbackError", playbackError.toFixed(2), " > SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
                         outputTorque = SlipFrictionForce;
                     } else if (playbackError < -SlipmatErrorThresh) {
-                        console.warn("--- playbackError < -SlipmatErrorThresh");
+                        console.warn("--- playbackError", playbackError.toFixed(2), " < SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
                         outputTorque = -SlipFrictionForce;
                     } else {
                         console.warn("--- playbackError ignored");
@@ -3850,7 +3850,7 @@ class S4Mk3MotorManager {
                     trackingError = (outputTorque - trackingTarget)/trackingTarget;
 
                     // Only apply nudge/jog if the disc has spun up to the target velocity
-                    if (this.isUpToSpeed === true && Math.abs(trackingError) > 0.02) { //TODO: move this to a config const in header
+                    if (this.isUpToSpeed == true && Math.abs(trackingError) > 0.02) { //TODO: move this to a config const in header
                         engine.setValue(this.deck.group, "jog", -trackingError*TurnTableNudgeSensitivity);
                         // console.warn(outputTorque, outputTracking, trackingError);
                     } else if (Math.abs(trackingError) < 0.02) { //TODO: move this to a config const in header
