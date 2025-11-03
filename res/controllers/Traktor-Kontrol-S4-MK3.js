@@ -299,7 +299,8 @@ const MoveModes = {
 
 // motor wind up/down
 const MotorWindUpMilliseconds = 0;
-const MotorWindDownMilliseconds = 500;
+// Note: this my need some tweaking per device.
+const MotorWindDownMilliseconds = 900;
 
 // Motor PID controller coefficients
 const ProportionalGain = 80000;
@@ -360,7 +361,7 @@ const TargetMotorOutput45RPM = 5600; //measured in a rough calibration test, not
 // And set the target motor output for nudging
 let rps = 0;
 let TargetMotorOutput = 0;
-if (BaseRevolutionsPerMinute == 33) {
+if (BaseRevolutionsPerMinute === "33") {
     rps = (100/3) / 60;
     TargetMotorOutput = TargetMotorOutput33RPM;
 } else { // 45 RPM
@@ -908,6 +909,8 @@ class Deck extends ComponentContainer {
         this.settings = settings;
         this.secondDeckModes = null;
         this.selectedHotcue = null;
+        this.wheelHardStopTimerId = 0;
+        this.wheelScratchPauseTimerId = 0;
 
         updateRuntimeData({
             selectedHotcue: {
@@ -1184,19 +1187,22 @@ class CueButton extends PushButton {
         if (this.deck.moveMode === MoveModes.keyboard && !this.deck.keyboardPlayMode) {
             this.deck.assignKeyboardPlayMode(this.group, this.inKey);
         } else if (this.deck.wheelMode === WheelModes.motor && engine.getValue(this.group, "play") && pressed) {
+            // We want to seek to Cue and stay there. Therefore, if we're in motor mode,
+            // temporarily decouple playback rate from jogwheel motion.
+            this.deck.wheelHardStop();
             engine.setValue(this.group, "cue_gotoandstop", pressed);
-            if (MotorWindDownMilliseconds > 0) {
-                this.deck.motorHardStop = true;
-                engine.beginTimer(MotorWindDownMilliseconds, () => {
-                    this.deck.motorHardStop = false;
-                }, true);
-            }
+            // engine.setValue(this.group, this.inKey, pressed);
         } else {
             if (this.deck.wheelMode === WheelModes.motor) {
                 engine.setValue(this.group, "scratch2_enable", false);
-                // engine.beginTimer(MotorWindDownMilliseconds, () => {
-                //     engine.setValue(this.group, "scratch2_enable", false);
-                // }, true);
+                if (this.deck.wheelScratchPauseTimerId !== 0) {
+                    engine.stopTimer(this.deck.wheelScratchPauseTimerId);
+                    this.deck.wheelScratchPauseTimerId = 0;
+                }
+                this.deck.wheelScratchPauseTimerId = engine.beginTimer(MotorWindDownMilliseconds, () => {
+                    this.deck.wheelScratchPauseTimerId = 0;
+                    engine.setValue(this.group, "scratch2_enable", false);
+                }, true);
             }
             engine.setValue(this.group, this.inKey, pressed);
         }
@@ -1263,6 +1269,15 @@ class HotcueButton extends PushButton {
             engine.setValue(this.deck.libraryPlayButton.group, this.inKey, pressed);
         } else {
             engine.setValue(this.group, "scratch2_enable", false);
+            // If we're releasing to end hotcue preview, we want to seek back
+            // to hotcue position and stay there. Therefore, if we're in motor mode,
+            // temporarily decouple playback rate from jogwheel motion.
+            if (this.deck.wheelMode === WheelModes.motor &&
+                    !pressed && !this.shifted &&
+                    engine.getValue(this.group, `hotcue_${this.number}_type`) === 1 && // hotcue
+                    engine.getValue(this.group, this.outKey) === 2) { // currently previewing
+                this.deck.wheelHardStop();
+            }
             engine.setValue(this.group, this.inKey, pressed);
             if (this.shifted) {
                 this.indicatorColor = LedColors.off;
@@ -3284,7 +3299,7 @@ class S4Mk3Deck extends Deck {
             }
         });
 
-        this.wheelMode = WheelModes.vinyl;
+        this.wheelMode = UseMotors ? WheelModes.motor : WheelModes.vinyl;
         this.turntableButton = new Button({
             deck: this,
             onShortPress: function() {
@@ -3647,6 +3662,21 @@ class S4Mk3Deck extends Deck {
         }
     }
 
+    wheelHardStop() {
+        if (this.wheelMode !== WheelModes.motor || MotorWindDownMilliseconds <= 0) {
+            return;
+        }
+        if (this.wheelHardStopTimerId !== 0) {
+            engine.stopTimer(this.wheelHardStopTimerId);
+            this.wheelHardStopTimerId = 0;
+        }
+        this.motorHardStop = true;
+        this.wheelHardStopTimerId = engine.beginTimer(MotorWindDownMilliseconds, () => {
+            this.wheelHardStopTimerId = 0;
+            this.motorHardStop = false;
+        }, true);
+    }
+
     hasSelectedStem() {
         return this.selectedStem.some((stemSelected) => stemSelected);
     }
@@ -3795,7 +3825,8 @@ class S4Mk3MotorManager {
                 targetRate = engine.getValue(this.deck.group, "rate_ratio");
 
                 // If the performer is holding the REV button, spin the wheel backwards
-                if (engine.getValue(this.deck.group, "reverseroll")) {
+                if (engine.getValue(this.deck.group, "reverseroll") ||
+                        engine.getValue(this.deck.group, "reverse")) {
                     targetRate = -targetRate;
                 }
 
@@ -3808,7 +3839,7 @@ class S4Mk3MotorManager {
                     console.warn("---> set slipping + scratching");
                     this.deck.isSlipping = true;
                     engine.setValue(this.deck.group, "scratch2_enable", true);
-                } else if (this.deck.wheelTouch.touched == false && this.deck.isSlipping && Math.abs(playbackError) < SlipmatErrorThresh) {
+                } else if (!this.deck.wheelTouch.touched && this.deck.isSlipping && Math.abs(playbackError) < SlipmatErrorThresh) {
                     // TODO ronso0
                     // make sure we properly reset isSlipping
                     console.warn("---> unset slipping + scratching");
@@ -3831,11 +3862,11 @@ class S4Mk3MotorManager {
                     }
                     // Use the slipmat error threshold as a 'dead zone' to avoid chattering
                     // when hand-spinning close to the nominal rotation velocity
-                    if (playbackError > SlipmatErrorThresh) {
-                        console.warn("--- playbackError", playbackError.toFixed(2), " > SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
+                    if (playbackError > SlipmatErrorThresh) { // slipping forward?
+                        console.warn("--- slipping FWD, playbackError", playbackError.toFixed(2), " > SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
                         outputTorque = SlipFrictionForce;
-                    } else if (playbackError < -SlipmatErrorThresh) {
-                        console.warn("--- playbackError", playbackError.toFixed(2), " < SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
+                    } else if (playbackError < -SlipmatErrorThresh) { // slipping backward?
+                        console.warn("--- slipping REV, playbackError", playbackError.toFixed(2), " < SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
                         outputTorque = -SlipFrictionForce;
                     } else {
                         console.warn("--- playbackError ignored");
@@ -3865,7 +3896,7 @@ class S4Mk3MotorManager {
                     trackingError = (outputTorque - trackingTarget)/trackingTarget;
 
                     // Only apply nudge/jog if the disc has spun up to the target velocity
-                    if (this.isUpToSpeed == true && Math.abs(trackingError) > 0.02) { //TODO: move this to a config const in header
+                    if (this.isUpToSpeed && Math.abs(trackingError) > 0.02) { //TODO: move this to a config const in header
                         engine.setValue(this.deck.group, "jog", -trackingError*TurnTableNudgeSensitivity);
                         // console.warn(outputTorque, outputTracking, trackingError);
                     } else if (Math.abs(trackingError) < 0.02) { //TODO: move this to a config const in header
@@ -3876,14 +3907,14 @@ class S4Mk3MotorManager {
                 // New torque becomes old torque
                 this.outputTorquePrev = outputTorque;
 
-            } else { // engine.getValue(this.deck.group, "play") == false)
+            } else { // engine.getValue(this.deck.group, "play") === 0)
                 // If the deck isn't playing, ensure that scratch mode is ON (for scrubbing)
                 // and reset the "isUpToSpeed" flag
                 this.isUpToSpeed = false;
                 this.isStopped = true;
                 engine.setValue(this.deck.group, "scratch2_enable", true);
             }
-        } else if (this.deck.wheelMode !== WheelModes.motor) {
+        } else {
             // In any other wheel mode, the motor only provides resistance to scrubbing/scratching
             if (TightnessFactor > 0.5) {
                 // Super loose
