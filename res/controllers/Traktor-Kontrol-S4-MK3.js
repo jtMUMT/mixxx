@@ -303,9 +303,9 @@ const MotorWindUpMilliseconds = 0;
 const MotorWindDownMilliseconds = 200;
 
 // Motor PID controller coefficients
-const ProportionalGain = 80000;
-const IntegrativeGain = 1000;
-const DerivativeGain = 50000;
+const ProportionalGain = 300;
+const IntegrativeGain = 1000;//2000;
+const DerivativeGain = 5000;//10000;
 
 //----------------
 // Input filtering of wheel velocity signal
@@ -393,6 +393,7 @@ const SlipmatErrorThreshLow = 0.04; // 5% velocity tolerance for slipping
 // causes no detrimental effects as long as the error threshold is large enough. If the
 // threshold is too small (below 0.2 in my testing) the integrator loses its power
 // and the turntable won't be able to reach the target angular velocity.
+const SuppressIntegrator = true;
 const IntegratorSuppressionErrorThresh = 0.3;
 
 // TESTING ONLY. These are configuration values for a motor test routine that I used to collect
@@ -3494,6 +3495,7 @@ class S4Mk3Deck extends Deck {
                     } else {
                         engine.setValue(this.group, "scratch2", this.velocity);
                     }
+                    engine.setValue(this.group, "scratch2", this.velocity);
                     break;
                 case WheelModes.loopIn:
                     {
@@ -3526,7 +3528,7 @@ class S4Mk3Deck extends Deck {
                     }
                     break;
                 default:
-                    console.warn("jog");
+                    // console.warn("jog");
                     engine.setValue(this.group, "jog", this.velocity);
                 }
             },
@@ -3876,7 +3878,12 @@ class S4Mk3MotorManager {
                     }
                 } else {
                     engine.setValue(this.deck.group, "scratch2_enable", true);
-                    this.bypassPID = true;
+                    if (normalizedVelocity <= this.hardStopReleaseThreshold) {
+                        //console.warn("threshold reached");
+                        this.bypassPID = true;
+                    } else {
+                        this.bypassPID = false;
+                    }
                 }
 
                 targetRate = 0; //if stopped, we simply set the target rate to zero
@@ -3905,7 +3912,7 @@ class S4Mk3MotorManager {
                 // console.warn("---> unset slipping + scratching");
                 this.deck.isSlipping = false;
                 engine.setValue(this.deck.group, "scratch2_enable", false);
-            } else if (Math.abs(playbackError) > IntegratorSuppressionErrorThresh) {
+            } else if (SuppressIntegrator && (Math.abs(playbackError) > IntegratorSuppressionErrorThresh)) {
                 // If we are beyond a certain error threshold, suppress
                 // error integrator --- to help with gracefully restoring rotation
                 // speed without overshoot when adjusting with the crown.
@@ -3935,10 +3942,15 @@ class S4Mk3MotorManager {
             } else if (!this.bypassPID) {
                 // If we aren't slipping, apply new motor controller.
                 // PID motor controller
-                this.proportionalTerm = playbackError * ProportionalGain;
+                this.proportionalTerm = playbackError * ProportionalGain * ProportionalGain;
                 this.integralAccumulator += playbackError * IntegrativeGain;
                 this.derivativeTerm = (playbackError - this.prevPlaybackError) * DerivativeGain;
                 outputTorque = this.proportionalTerm + this.integralAccumulator - this.derivativeTerm;
+
+                // EXPERIMENTAL: IF TARGET RATE ZERO, DAMP THE MOTOR OUTPUT FOR A MORE PRONOUNCED SPIN-DOWN
+                if (targetRate == 0){
+                    outputTorque = Math.sign(outputTorque)*SlipFrictionForce;
+                }
 
                 // Difference calculation for a smoothing filter
                 torqueDiff = outputTorque - this.outputTorquePrev;
@@ -3958,10 +3970,11 @@ class S4Mk3MotorManager {
                 // Only apply nudge/jog if the disc has spun up to the target velocity
                 if (this.isUpToSpeed && Math.abs(trackingError) > 0.03) { //TODO: move this to a config const in header
                     var jogamnt = -trackingError*TurnTableNudgeSensitivity;
+
                     if (Math.abs(jogamnt) >= 0.01) { 
-                        console.warn("jogging:",jogamnt);
+                        //console.warn("jogging:",jogamnt);
                         engine.setValue(this.deck.group, "jog", -trackingError*TurnTableNudgeSensitivity);
-                        // console.warn(outputTorque, outputTracking, trackingError);
+                        // console.warn(outputTorque, outputTracking, trackingError);                
                     }
                 } else if (Math.abs(trackingError) < 0.03) { //TODO: move this to a config const in header
                     // If we've spun all the way up to speed, only then act like it's jogging time.
@@ -4073,20 +4086,22 @@ class S4Mk3MotorManager {
         // before breaking down the control parameters into physical constants.
 
         // Write the calculated value to the motor output buffer
-        if (outputTorque != 0) {
-            if (this.isSlipping) {
-                console.warn(outputTorque.toFixed(2),this.deck.velFilter.getCurrentVel().toFixed(2));
-            } else {
-                if (Math.abs(trackingError) > 0.02) {
-                    console.warn(outputTorque.toFixed(2),this.deck.velFilter.getCurrentVel().toFixed(2),this.deck.wheelPosition.velocity.toFixed(2),trackingError.toFixed(2));
-                } else {
-                    console.warn(outputTorque.toFixed(2),this.deck.velFilter.getCurrentVel().toFixed(2),this.deck.wheelPosition.velocity.toFixed(2));
-                }
-            }
-        }
+        // if (outputTorque != 0) {
+        //     if (this.isSlipping) {
+        //         // console.warn(outputTorque.toFixed(2),this.deck.velFilter.getCurrentVel().toFixed(2));
+        //         // console.warn(outputTorque.toFixed(2),this.deck.velFilter.getCurrentVel().toFixed(2));
+        //     } else {
+        //         if (Math.abs(trackingError) > 0.02) {
+        //             console.warn(outputTorque.toFixed(2),this.deck.velFilter.getCurrentVel().toFixed(2),this.deck.wheelPosition.velocity.toFixed(2),trackingError.toFixed(2));
+        //         } else {
+        //             console.warn(outputTorque.toFixed(2),this.deck.velFilter.getCurrentVel().toFixed(2),this.deck.wheelPosition.velocity.toFixed(2));
+        //         }
+        //     }
+        // }
         this.motorBuffMgr.setMotorOutput(this.deckMotorID, outputTorque);
 
-        return true;
+        // return true;
+        return outputTorque;
     }
 }
 
@@ -4477,8 +4492,13 @@ class S4MK3 {
     }
     motorCallback() {
         if (UseMotors) {
-            this.leftMotor.tick();
-            this.rightMotor.tick();
+            let out1 = 0;
+            let out2 = 0;
+            out1 = this.leftMotor.tick().toFixed(2);
+            out2 = this.rightMotor.tick().toFixed(2);
+            if (out1 != 0.00 || out2 != 0.00){
+                console.warn(out1,out2);
+            }
             controller.sendOutputReport(HIDOutputMotorsReportID, this.motorBuffMgr.getBuff(), true);
         }
     }
