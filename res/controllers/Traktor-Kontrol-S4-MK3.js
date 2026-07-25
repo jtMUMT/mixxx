@@ -2389,8 +2389,12 @@ class S4Mk3Deck extends Deck {
             inKey: "rate",
             outKey: "rate",
             appliedValue: null,
+            combinedValue: null,
             tempoCenterUpper: this.settings.tempoCenterUpper,
             tempoCenterLower: this.settings.tempoCenterLower,
+            shifted: true,
+            shiftRatio: 8/50,
+            initShift: true,
             input: function(value) {
                 const receivingFirstValue = this.appliedValue === null;
 
@@ -2404,9 +2408,18 @@ class S4Mk3Deck extends Deck {
                     // reset rate in center region
                     this.appliedValue = 0;
                 }
-                engine.setValue(this.group, this.inKey, this.appliedValue);
 
-                if (receivingFirstValue) {
+                // Apply coarse shift (ultrapitch)
+                if (this.shifted) {
+                    this.shiftedHardwarePosition = this.appliedValue;
+                } else {
+                    this.hardwarePosition = this.appliedValue;
+                }
+                this.combinedvalue = this.shiftedHardwarePosition + (this.hardwarePosition*this.shiftRatio);
+
+                engine.setValue(this.group, this.inKey, this.combinedvalue);
+
+                if (receivingFirstValue || this.initShift) {
                     engine.softTakeover(this.group, this.inKey, true);
                     // Forec-update LED.
                     // Output connection is made and updated before input() can set this.appliedValue
@@ -2435,7 +2448,15 @@ class S4Mk3Deck extends Deck {
                 } else {
                     this.send(0);
                 }
-            }
+            },
+            unshift: function() {
+                this.shifted = false;
+                this.initShift = true;
+            },
+            shift: function() {
+                this.shifted = true;
+                this.initShift = true;
+            },
         });
 
         this.reverseButton = new Button({
@@ -3792,6 +3813,7 @@ class S4Mk3MotorManager {
         // let outputTracking = 0; // for debugging
         let trackingError = 0;
         let trackingTarget = 0;
+        let jogThreshold = 0.05;
 
         // Declaring local constant used in jog mode
         const maxVelocity = 10; //FIXME: hardcoded and unexplained
@@ -3957,8 +3979,15 @@ class S4Mk3MotorManager {
                 trackingError = this.outputTrackingPrev + ((trackingError - this.outputTrackingPrev)/40);
                 this.outputTrackingPrev = trackingError;
 
+                // TESTING: adaptive jog detection ratio for extreme speeds
+                if (engine.getValue(this.deck.group, "rate_ratio") < 0.8) {
+                    jogThreshold = 0.5;
+                } else {
+                    jogThreshold = 0.05;
+                }
+
                 // Only apply nudge/jog if the disc has spun up to the target velocity
-                if (this.isUpToSpeed && Math.abs(trackingError) > 0.03) { //TODO: move this to a config const in header
+                if (this.isUpToSpeed && Math.abs(trackingError) > jogThreshold) { //TODO: move this to a config const in header
                     engine.setValue(this.deck.group, "jog", -trackingError*TurnTableNudgeSensitivity);
                     console.warn("jog");
                     // console.warn(outputTorque, outputTracking, trackingError);
