@@ -391,7 +391,7 @@ const MotorOutSmoothingFactor = 1/2; // 0.5; // smaller is smoother but slower
 const NonSlipPitchSmoothing = 1/2;
 
 // Slipmat starts slipping when this error level is surpassed
-const SlipmatErrorThresh = 0.13; // % velocity tolerance for slipping
+const SlipmatErrorThresh = 0.3; // % velocity tolerance for slipping
 
 // Integrator suppression slip threshold
 // this is an attempt to stop the cumulative error from causing big overshoots
@@ -3504,7 +3504,7 @@ class S4Mk3Deck extends Deck {
                             this.prevPitch = this.velocity;
                         }
                     } else {
-                        if (Math.abs(this.velocity) > 0.1) {
+                        if (Math.abs(this.velocity) > SlipmatErrorThresh) {
                             engine.setValue(this.group, "scratch2", this.velocity);
                         } else {
                             engine.setValue(this.group, "scratch2", 0);
@@ -3784,12 +3784,13 @@ class S4Mk3MotorManager {
         this.motorTestingNextInterval = S4MK3MOTORTEST_UPTIME;
         this.motorTestingCurrentLevel = S4MK3MOTORTEST_STARTLVL;
 
-        this.nominalRatePrenudge = 1.0;
         this.isUpToSpeed = false;
         this.isStopped = false;
         this.bypassPID = false;
 
         this.slipHyst = SlipmatErrorThresh;
+
+        this.isJogging = false;
 
         // Hard stop release threshold:
         // When the normalizedVelocity goes below this thresh, bypass the PID controller for the rest of the hard stop timer.
@@ -3822,7 +3823,7 @@ class S4Mk3MotorManager {
         if (this.deck.wheelMode === WheelModes.motor) {
             if (engine.getValue(this.deck.group, "play")) {
                 if (this.isStopped) {
-                    console.warn("playing");
+                    // console.warn("playing");
                     this.bypassPID = false;
                     this.isStopped = false;
                     engine.setValue(this.deck.group, "scratch2_enable", false);
@@ -3913,19 +3914,30 @@ class S4Mk3MotorManager {
 
             // If we are touching the disc AND the playbackError goes beyond
             // the slipping threshold, apply the slip force only
-            if (this.deck.wheelTouch.touched && Math.abs(playbackError) > this.slipHyst) {
-                console.warn("---> set slipping + scratching");
-                this.deck.isSlipping = true;
-                engine.setValue(this.deck.group, "scratch2_enable", true);
-            } else if (!this.deck.wheelTouch.touched && this.deck.isSlipping && Math.abs(playbackError) < SlipmatErrorThresh) {
-                // TODO ronso0
-                // make sure we properly reset isSlipping
-                console.warn("---> unset slipping + scratching");
-                this.deck.isSlipping = false;
-                engine.setValue(this.deck.group, "scratch2_enable", false);
+            if (this.deck.wheelTouch.touched) {
+                if (Math.abs(playbackError) > this.slipHyst) {
+                    // console.warn("---> set slipping + scratching");
+                    this.deck.isSlipping = true;
+                    this.isUpToSpeed = false;
+                    engine.setValue(this.deck.group, "scratch2_enable", true);
+                } else {
+                    this.slipHyst = SlipmatErrorThresh;
+                    this.deck.isSlipping = false;
+                    engine.setValue(this.deck.group, "scratch2_enable", false);
+                }
             } else {
-                engine.setValue(this.deck.group, "scratch2_enable", false);
+                if (this.deck.isSlipping && Math.abs(playbackError) < SlipmatErrorThresh) {
+                    // TODO ronso0
+                    // make sure we properly reset isSlipping
+                    // console.warn("---> unset slipping + scratching");
+                    this.deck.isSlipping = false;
+                    // this.isUpToSpeed = true;
+                    engine.setValue(this.deck.group, "scratch2_enable", false);
+                }
             }
+            // } else {
+            //     engine.setValue(this.deck.group, "scratch2_enable", false);
+            // }
 
             if (SuppressIntegrator && (Math.abs(playbackError) > IntegratorSuppressionErrorThresh)) {
                 // If we are beyond a certain error threshold, suppress
@@ -3945,17 +3957,17 @@ class S4Mk3MotorManager {
                 // Use the slipmat error threshold as a 'dead zone' to avoid chattering
                 // when hand-spinning close to the nominal rotation velocity
                 if (playbackError > this.slipHyst) { // slipping back?
-                    console.warn(outputTorque);
+                    // console.warn(outputTorque);
                     this.slipHyst = SlipmatErrorThresh / 4;
                     outputTorque = SlipFrictionForce;
-                    console.warn("--- slipping REV, playbackError", playbackError.toFixed(2), " > SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
+                    // console.warn("--- slipping REV, playbackError", playbackError.toFixed(2), " > SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
                 } else if (playbackError < -this.slipHyst) { // slipping forward?
                     // outputTorque = -SlipFrictionForce * (targetRate==0) * clamp(playbackError - SlipmatErrorThresh,-1,1);
                     this.slipHyst = SlipmatErrorThresh / 4;
                     outputTorque = -SlipFrictionForce;
-                    console.warn("--- slipping FWD, playbackError", playbackError.toFixed(2), " < SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
+                    // console.warn("--- slipping FWD, playbackError", playbackError.toFixed(2), " < SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
                 } else {
-                    console.warn("--- playbackError ignored");
+                    // console.warn("--- playbackError ignored");
                     this.slipHyst = SlipmatErrorThresh;
                     outputTorque = 0;
                 }
@@ -3988,11 +4000,14 @@ class S4Mk3MotorManager {
                 // Only apply nudge/jog if the disc has spun up to the target velocity
                 if (this.isUpToSpeed && Math.abs(trackingError) > MotorTrackingErrorThresh) { //TODO: move this to a config const in header
                     engine.setValue(this.deck.group, "jog", -trackingError*TurnTableNudgeSensitivity);
-                    console.warn("jog");
+                    this.isJogging = true;
+                    // console.warn("jog");
                     // console.warn(outputTorque, outputTracking, trackingError);
-                } else if (Math.abs(trackingError) < 0.02) { //TODO: move this to a config const in header
+                } else if (Math.abs(trackingError) < MotorTrackingErrorThresh) { //TODO: move this to a config const in header
                     // If we've spun all the way up to speed, only then act like it's jogging time.
+                    this.isJogging = false;
                     this.isUpToSpeed = true;
+                    // console.warn("UP TO SPEED");
                 }
             }
             // New torque becomes old torque
@@ -4101,14 +4116,15 @@ class S4Mk3MotorManager {
 
         // // TESTING: display motor output visually on the console
         if (engine.getValue(this.deck.group, "play")) {
-            let motorOutputRatio = (outputTorque / this.motorBuffMgr.maxOutput)*50;
+            const motorOutputChars = 20;
+            let motorOutputRatio = (outputTorque / this.motorBuffMgr.maxOutput)*motorOutputChars;
             let motorOutputString = "";
-            let motorOutputChar = "+";
+            let motorOutputChar = "-";
             if (motorOutputRatio < 0) {
-                motorOutputChar = "-";
+                motorOutputChar = "+";
                 motorOutputRatio = -motorOutputRatio;
             }
-            for (let i = 0; i <= 50; i++) {
+            for (let i = 0; i <= motorOutputChars; i++) {
                 if (motorOutputRatio > i) {
                     motorOutputString += motorOutputChar;
                 } else {
@@ -4117,6 +4133,42 @@ class S4Mk3MotorManager {
             }
             motorOutputString += "|    ";
             motorOutputString += trackingError.toFixed(2);
+            motorOutputString += " | ";
+
+            if (this.isStopped) {
+                motorOutputString += "STOP";
+            } else {
+                motorOutputString += "PLAY";
+            }
+
+            motorOutputString += " | ";
+
+            if (this.deck.isSlipping) {
+                motorOutputString += "SLIP";
+                if (playbackError > 0) {
+                    motorOutputString += "-";
+                } else {
+                    motorOutputString += "+";
+                }
+            } else if (this.isJogging) {
+                motorOutputString += "JOG";
+                if (playbackError > 0) {
+                    motorOutputString += "-";
+                } else {
+                    motorOutputString += "+";
+                }
+            } else {
+                motorOutputString += "     ";
+            }
+
+            motorOutputString += " | ";
+
+            if (this.isUpToSpeed) {
+                motorOutputString += "UP2SPEED";
+            } else {
+                motorOutputString += "-------";
+            }
+
             console.warn(motorOutputString);
         }
 
