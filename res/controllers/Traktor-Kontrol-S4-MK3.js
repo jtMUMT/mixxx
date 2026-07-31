@@ -303,9 +303,9 @@ const MotorWindUpMilliseconds = 0;
 const MotorWindDownMilliseconds = 200;
 
 // Motor PID controller coefficients
-const ProportionalGain = 180000;
-const IntegrativeGain = 1000;
-const DerivativeGain = 100000;
+const ProportionalGain = 100*1000;//180000;
+const IntegrativeGain = 1;
+const DerivativeGain = 50*1000;
 
 //----------------
 // Input filtering of wheel velocity signal
@@ -374,14 +374,14 @@ const BaseEncoderTicksPerDegree = BaseDegreesPerSecond * 8;
 
 // Motor output smoothing damps some of the jitter.
 // Incremental change from previous to current sample is reduced by this factor.
-const MotorOutSmoothingFactor = 1/5; // 0.5; // smaller is smoother but slower
+const MotorOutSmoothingFactor = 1/2; // 0.5; // smaller is smoother but slower
 
 // When not scratching, the input velocity goes through an extra smoothing filter
 // to help with determining the nudge/jog factor of crown adjustments
-const NonSlipPitchSmoothing = 0.5;
+const NonSlipPitchSmoothing = 1/2;
 
 // Slipmat starts slipping when this error level is surpassed
-const SlipmatErrorThresh = 0.05; // 5% velocity tolerance for slipping
+const SlipmatErrorThresh = 0.13; // % velocity tolerance for slipping
 
 // Integrator suppression slip threshold
 // this is an attempt to stop the cumulative error from causing big overshoots
@@ -1274,7 +1274,7 @@ class HotcueButton extends PushButton {
         } else if (this.deck.libraryPlayButton.pressed) {
             engine.setValue(this.deck.libraryPlayButton.group, this.inKey, pressed);
         } else {
-            if (this.deck.wheelMode === wheelModes.vinyl && !this.deck.wheelTouch.touched) {
+            if (this.deck.wheelMode === WheelModes.vinyl && !this.deck.wheelTouch.touched) {
                 engine.setValue(this.group, "scratch2_enable", false);
             }
             // If we're releasing to end hotcue preview, we want to seek back
@@ -3494,7 +3494,12 @@ class S4Mk3Deck extends Deck {
                             this.prevPitch = this.velocity;
                         }
                     } else {
-                        engine.setValue(this.group, "scratch2", this.velocity);
+                        if (Math.abs(this.velocity) > 0.1) {
+                            engine.setValue(this.group, "scratch2", this.velocity);
+                        } else {
+                            engine.setValue(this.group, "scratch2", 0);
+                        }
+
                     }
                     break;
                 case WheelModes.loopIn:
@@ -3782,6 +3787,7 @@ class S4Mk3MotorManager {
         // NOTE: this might be an indication that the PID controller is not perfectly tuned, as steady-state oscillation is
         //       an expected property of such controllers which can be minimized (with tradeoffs in slew rate and overshoot).
         this.hardStopReleaseThreshold = 0.3;
+
     }
     tick() {
         let outputTorque = 0;
@@ -3905,7 +3911,11 @@ class S4Mk3MotorManager {
                 console.warn("---> unset slipping + scratching");
                 this.deck.isSlipping = false;
                 engine.setValue(this.deck.group, "scratch2_enable", false);
-            } else if (SuppressIntegrator && (Math.abs(playbackError) > IntegratorSuppressionErrorThresh)) {
+            } else {
+                engine.setValue(this.deck.group, "scratch2_enable", false);
+            }
+
+            if (SuppressIntegrator && (Math.abs(playbackError) > IntegratorSuppressionErrorThresh)) {
                 // If we are beyond a certain error threshold, suppress
                 // error integrator --- to help with gracefully restoring rotation
                 // speed without overshoot when adjusting with the crown.
