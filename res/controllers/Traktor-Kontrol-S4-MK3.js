@@ -368,6 +368,16 @@ if (BaseRevolutionsPerMinute === "33") {
     rps = BaseRevolutionsPerMinute / 60;
     TargetMotorOutput = TargetMotorOutput45RPM;
 }
+// Motor output tracking error threshold
+// This determines the % distance from the target output when the system
+// considers the jogwheel to be "up to speed". It is used to calculate
+// "jog" adjustments that shouldn't be activated until the disc is
+// rotating at normal playback speed
+const MotorTrackingErrorThresh = 0.1;
+// The motor tracking error can be aggressively lowpassed to ensure that
+// jogging/nudging is gradually applied
+const MotorTrackingSmoothingFactor = 1/40;
+
 const baseRevolutionsPerSecond = rps;
 const BaseDegreesPerSecond = baseRevolutionsPerSecond * 360;
 const BaseEncoderTicksPerDegree = BaseDegreesPerSecond * 8;
@@ -3779,6 +3789,8 @@ class S4Mk3MotorManager {
         this.isStopped = false;
         this.bypassPID = false;
 
+        this.slipHyst = SlipmatErrorThresh;
+
         // Hard stop release threshold:
         // When the normalizedVelocity goes below this thresh, bypass the PID controller for the rest of the hard stop timer.
         // Otherwise, the controller tends to reach a steady-state oscillation around zero, which causes the playhead to twitch
@@ -3901,7 +3913,7 @@ class S4Mk3MotorManager {
 
             // If we are touching the disc AND the playbackError goes beyond
             // the slipping threshold, apply the slip force only
-            if (this.deck.wheelTouch.touched && Math.abs(playbackError) > SlipmatErrorThresh) {
+            if (this.deck.wheelTouch.touched && Math.abs(playbackError) > this.slipHyst) {
                 console.warn("---> set slipping + scratching");
                 this.deck.isSlipping = true;
                 engine.setValue(this.deck.group, "scratch2_enable", true);
@@ -3932,14 +3944,19 @@ class S4Mk3MotorManager {
                 }
                 // Use the slipmat error threshold as a 'dead zone' to avoid chattering
                 // when hand-spinning close to the nominal rotation velocity
-                if (playbackError > SlipmatErrorThresh) { // slipping forward?
-                    console.warn("--- slipping FWD, playbackError", playbackError.toFixed(2), " > SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
+                if (playbackError > this.slipHyst) { // slipping back?
+                    console.warn(outputTorque);
+                    this.slipHyst = SlipmatErrorThresh / 4;
                     outputTorque = SlipFrictionForce;
-                } else if (playbackError < -SlipmatErrorThresh) { // slipping backward?
-                    console.warn("--- slipping REV, playbackError", playbackError.toFixed(2), " < SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
+                    console.warn("--- slipping REV, playbackError", playbackError.toFixed(2), " > SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
+                } else if (playbackError < -this.slipHyst) { // slipping forward?
+                    // outputTorque = -SlipFrictionForce * (targetRate==0) * clamp(playbackError - SlipmatErrorThresh,-1,1);
+                    this.slipHyst = SlipmatErrorThresh / 4;
                     outputTorque = -SlipFrictionForce;
+                    console.warn("--- slipping FWD, playbackError", playbackError.toFixed(2), " < SlipmatErrorThresh", SlipmatErrorThresh.toFixed(2));
                 } else {
                     console.warn("--- playbackError ignored");
+                    this.slipHyst = SlipmatErrorThresh;
                     outputTorque = 0;
                 }
             } else if (!this.bypassPID) {
@@ -3964,11 +3981,12 @@ class S4Mk3MotorManager {
                 // NOTE: assumes linear mapping between motor output and wheel velocity (is not 100% correct but it's close enough for now)
                 trackingTarget = TargetMotorOutput*engine.getValue(this.deck.group, "rate_ratio");
                 trackingError = (outputTorque - trackingTarget)/trackingTarget;
-                trackingError = this.outputTrackingPrev + ((trackingError - this.outputTrackingPrev)/40);
+                // Apply smoothing filter
+                trackingError = this.outputTrackingPrev + ((trackingError - this.outputTrackingPrev)*MotorTrackingSmoothingFactor);
                 this.outputTrackingPrev = trackingError;
 
                 // Only apply nudge/jog if the disc has spun up to the target velocity
-                if (this.isUpToSpeed && Math.abs(trackingError) > 0.03) { //TODO: move this to a config const in header
+                if (this.isUpToSpeed && Math.abs(trackingError) > MotorTrackingErrorThresh) { //TODO: move this to a config const in header
                     engine.setValue(this.deck.group, "jog", -trackingError*TurnTableNudgeSensitivity);
                     console.warn("jog");
                     // console.warn(outputTorque, outputTracking, trackingError);
