@@ -373,7 +373,7 @@ if (BaseRevolutionsPerMinute === "33") {
 // considers the jogwheel to be "up to speed". It is used to calculate
 // "jog" adjustments that shouldn't be activated until the disc is
 // rotating at normal playback speed
-const MotorTrackingErrorThresh = 0.1;
+const MotorTrackingErrorThresh = 0.2;
 // The motor tracking error can be aggressively lowpassed to ensure that
 // jogging/nudging is gradually applied
 const MotorTrackingSmoothingFactor = 1/40;
@@ -4003,7 +4003,7 @@ class S4Mk3MotorManager {
                     this.isJogging = true;
                     // console.warn("jog");
                     // console.warn(outputTorque, outputTracking, trackingError);
-                } else if (Math.abs(trackingError) < MotorTrackingErrorThresh) { //TODO: move this to a config const in header
+                } else if ((Math.abs(trackingError) < MotorTrackingErrorThresh) && (Math.abs(playbackError < SlipmatErrorThresh))) { //TODO: move this to a config const in header
                     // If we've spun all the way up to speed, only then act like it's jogging time.
                     this.isJogging = false;
                     this.isUpToSpeed = true;
@@ -4115,7 +4115,7 @@ class S4Mk3MotorManager {
         // before breaking down the control parameters into physical constants.
 
         // // TESTING: display motor output visually on the console
-        if (engine.getValue(this.deck.group, "play")) {
+        if (engine.getValue(this.deck.group, "play") || (engine.getValue(this.deck.group, "scratch2") !== 0)) {
             const motorOutputChars = 20;
             let motorOutputRatio = (outputTorque / this.motorBuffMgr.maxOutput)*motorOutputChars;
             let motorOutputString = "";
