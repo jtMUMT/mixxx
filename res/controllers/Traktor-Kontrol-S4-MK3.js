@@ -497,6 +497,9 @@ class FilterBuffer {
         // Holds the last calculated output value for reference
         this.velFiltered = 0;
 
+        this.clearBuffer();
+    }
+    clearBuffer() {
         // Initialize the buffer with zeros
         for (let i = 0; i < this.size; i++) {
             this.data[i] = 0;
@@ -3471,6 +3474,7 @@ class S4Mk3Deck extends Deck {
                 //            without screwing with the motor controller during a hard-stop scenario.
                 if (this.deck.motorHardStop) {
                     this.velocity = 0;
+                    this.vFilter.clearBuffer();
                 }
 
                 // Overwrite the previous position/time data with the current values
@@ -3504,7 +3508,7 @@ class S4Mk3Deck extends Deck {
                             this.prevPitch = this.velocity;
                         }
                     } else {
-                        if (Math.abs(this.velocity) > SlipmatErrorThresh) {
+                        if (Math.abs(this.velocity) > 0.3) {
                             engine.setValue(this.group, "scratch2", this.velocity);
                         } else {
                             engine.setValue(this.group, "scratch2", 0);
@@ -3883,7 +3887,7 @@ class S4Mk3MotorManager {
                 }
 
                 // CUE AND STOP: if you simply disable scratch mode as a rule, your cue-and-stop will work 100%
-                // engine.setValue(this.deck.group, "scratch2_enable", false);
+                engine.setValue(this.deck.group, "scratch2_enable", false);
 
                 // CUE AND STOP: but if you _also_ want the vinyl-like spindown on stop, this works, but might
                 // require different wheelHardStop / MotorWindDown timings to adapt to different hardware units
